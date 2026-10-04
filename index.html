@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ASTC → PNG</title>
+
+<style>
+*{box-sizing:border-box}
+
+body{
+    margin:0;
+    min-height:100vh;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+    background:#111;
+    color:#eee;
+    font-family:Arial,sans-serif
+}
+
+.box{
+    width:min(520px,100%);
+    padding:24px;
+    background:#1d1d1d;
+    border-radius:18px;
+    box-shadow:0 10px 40px #0008
+}
+
+h1{
+    text-align:center;
+    margin:0 0 8px
+}
+
+.sub{
+    text-align:center;
+    color:#aaa;
+    margin:0 0 20px
+}
+
+input{
+    width:100%;
+    padding:12px;
+    background:#292929;
+    color:#fff;
+    border:1px solid #444;
+    border-radius:10px
+}
+
+button{
+    width:100%;
+    padding:14px;
+    margin-top:10px;
+    border:0;
+    border-radius:10px;
+    background:#4caf50;
+    color:#fff;
+    font-size:16px;
+    font-weight:bold
+}
+
+button:disabled{
+    opacity:.45
+}
+
+#status{
+    margin-top:18px;
+    color:#ccc;
+    white-space:pre-wrap;
+    font-size:14px
+}
+
+.progress{
+    height:18px;
+    margin-top:12px;
+    background:#333;
+    border-radius:999px;
+    overflow:hidden
+}
+
+.bar{
+    width:0%;
+    height:100%;
+    background:#4caf50;
+    transition:width .08s linear
+}
+
+.percent{
+    text-align:right;
+    margin-top:5px;
+    font-size:13px;
+    color:#aaa
+}
+
+canvas{
+    display:block;
+    max-width:100%;
+    height:auto;
+    margin:18px auto 0;
+    border-radius:8px;
+    background:
+        repeating-conic-gradient(
+            #aaa 0 25%,
+            #eee 0 50%
+        ) 50%/20px 20px
+}
+
+a{
+    display:block;
+    margin-top:14px;
+    text-align:center;
+    color:#7dd3fc;
+    font-weight:bold
+}
+
+.info{
+    margin-top:12px;
+    text-align:center;
+    color:#777;
+    font-size:12px
+}
+</style>
+</head>
+
+<body>
+
+<div class="box">
+
+<h1>ASTC → PNG</h1>
+
+<p class="sub">
+Conversor 100% offline
+</p>
+
+<input
+    id="file"
+    type="file"
+    accept=".astc,.ASTC"
+>
+
+<button id="convert" disabled>
+CONVERTER PARA PNG
+</button>
+
+<div class="progress">
+    <div class="bar" id="bar"></div>
+</div>
+
+<div class="percent" id="percent">
+0%
+</div>
+
+<div id="status">
+Escolha um arquivo .astc.
+</div>
+
+<canvas id="canvas" hidden></canvas>
+
+<a id="download" hidden>
+⬇ Baixar PNG
+</a>
+
+<div class="info">
+Decoder ASTC local • sem CDN • sem upload
+</div>
+
+</div>
+
+<script>
+
+const fileInput =
+    document.getElementById("file");
+
+const convertBtn =
+    document.getElementById("convert");
+
+const status =
+    document.getElementById("status");
+
+const bar =
+    document.getElementById("bar");
+
+const percent =
+    document.getElementById("percent");
+
+const canvas =
+    document.getElementById("canvas");
+
+const download =
+    document.getElementById("download");
+
+
+let selectedFile = null;
+let currentUrl = null;
+
+
+function setProgress(value, message){
+
+    const p =
+        Math.max(
+            0,
+            Math.min(100, value)
+        );
+
+    bar.style.width =
+        p + "%";
+
+    percent.textContent =
+        Math.round(p) + "%";
+
+    if(message){
+        status.textContent =
+            message;
+    }
+}
+
+
+function readHeader(bytes){
+
+    if(bytes.length < 16){
+        throw new Error(
+            "Arquivo muito pequeno."
+        );
+    }
+
+
+    if(
+        bytes[0] !== 0x13 ||
+        bytes[1] !== 0xAB ||
+        bytes[2] !== 0xA1 ||
+        bytes[3] !== 0x5C
+    ){
+        throw new Error(
+            "Cabeçalho ASTC inválido."
+        );
+    }
+
+
+    return {
+
+        blockWidth:
+            bytes[4],
+
+        blockHeight:
+            bytes[5],
+
+        blockDepth:
+            bytes[6],
+
+        width:
+            bytes[7] |
+            (bytes[8] << 8) |
+            (bytes[9] << 16),
+
+        height:
+            bytes[10] |
+            (bytes[11] << 8) |
+            (bytes[12] << 16),
+
+        depth:
+            bytes[13] |
+            (bytes[14] << 8) |
+            (bytes[15] << 16)
+    };
+}
+
+
+fileInput.addEventListener(
+    "change",
+    () => {
+
+        selectedFile =
+            fileInput.files[0] || null;
+
+        convertBtn.disabled =
+            !selectedFile;
+
+        download.hidden =
+            true;
+
+        canvas.hidden =
+            true;
+
+        setProgress(
+            0,
+
+            selectedFile
+                ? "Arquivo: " +
+                  selectedFile.name
+                : "Escolha um arquivo .astc."
+        );
+    }
+);
+
+
+convertBtn.addEventListener(
+    "click",
+    async () => {
+
+        if(!selectedFile){
+            return;
+        }
+
+
+        convertBtn.disabled =
+            true;
+
+        download.hidden =
+            true;
+
+        canvas.hidden =
+            true;
+
+
+        try{
+
+            setProgress(
+                2,
+                "Lendo arquivo ASTC..."
+            );
+
+
+            const buffer =
+                await selectedFile.arrayBuffer();
+
+            const bytes =
+                new Uint8Array(buffer);
+
+            const h =
+                readHeader(bytes);
+
+
+            if(h.depth !== 1){
+
+                throw new Error(
+                    "Este conversor suporta texturas ASTC 2D."
+                );
+            }
+
+
+            const blocksX =
+                Math.ceil(
+                    h.width /
+                    h.blockWidth
+                );
+
+            const blocksY =
+                Math.ceil(
+                    h.height /
+                    h.blockHeight
+                );
+
+            const expected =
+                blocksX *
+                blocksY *
+                16;
+
+
+            if(
+                bytes.length - 16 <
+                expected
+            ){
+
+                throw new Error(
+                    "Dados ASTC incompletos. " +
+                    "Esperados " +
+                    expected +
+                    " bytes depois do cabeçalho."
+                );
+            }
+
+
+            status.textContent =
+                "ASTC válido!\n" +
+                "Resolução: " +
+                h.width +
+                " × " +
+                h.height +
+                "\n" +
+                "Bloco: " +
+                h.blockWidth +
+                " × " +
+                h.blockHeight +
+                "\n\n" +
+                "Decodificando...";
+
+
+            /*
+             * O decoder recebe somente
+             * os blocos ASTC.
+             *
+             * O cabeçalho de 16 bytes
+             * não é enviado.
+             */
+
+            const compressed =
+                bytes.slice(
+                    16,
+                    16 + expected
+                );
+
+
+            const worker =
+                new Worker(
+                    "./decoder/worker.js",
+                    {
+                        type:"module"
+                    }
+                );
+
+
+            const rgbaBuffer =
+                await new Promise(
+                    (resolve, reject) => {
+
+                        worker.onmessage =
+                            (event) => {
+
+                                const msg =
+                                    event.data;
+
+
+                                if(
+                                    msg.type ===
+                                    "progress"
+                                ){
+
+                                    setProgress(
+                                        5 +
+                                        msg.value *
+                                        85,
+
+                                        "Decodificando ASTC..."
+                                    );
+                                }
+
+
+                                if(
+                                    msg.type ===
+                                    "status"
+                                ){
+
+                                    status.textContent =
+                                        msg.message;
+                                }
+
+
+                                if(
+                                    msg.type ===
+                                    "done"
+                                ){
+
+                                    worker.terminate();
+
+                                    resolve(
+                                        msg.rgba
+                                    );
+                                }
+
+
+                                if(
+                                    msg.type ===
+                                    "error"
+                                ){
+
+                                    worker.terminate();
+
+                                    reject(
+                                        new Error(
+                                            msg.message
+                                        )
+                                    );
+                                }
+                            };
+
+
+                        worker.onerror =
+                            (event) => {
+
+                                worker.terminate();
+
+                                reject(
+                                    new Error(
+                                        event.message ||
+                                        "Erro no Worker ASTC."
+                                    )
+                                );
+                            };
+
+
+                        worker.postMessage(
+                            {
+                                data:
+                                    compressed.buffer,
+
+                                width:
+                                    h.width,
+
+                                height:
+                                    h.height,
+
+                                blockWidth:
+                                    h.blockWidth,
+
+                                blockHeight:
+                                    h.blockHeight
+                            },
+
+                            [
+                                compressed.buffer
+                            ]
+                        );
+                    }
+                );
+
+
+            setProgress(
+                92,
+                "Preparando imagem..."
+            );
+
+
+            const rgba =
+                new Uint8ClampedArray(
+                    rgbaBuffer
+                );
+
+
+            const expectedRGBA =
+                h.width *
+                h.height *
+                4;
+
+
+            if(
+                rgba.length !==
+                expectedRGBA
+            ){
+
+                throw new Error(
+                    "RGBA inválido: " +
+                    rgba.length +
+                    " bytes; esperados " +
+                    expectedRGBA +
+                    "."
+                );
+            }
+
+
+            canvas.width =
+                h.width;
+
+            canvas.height =
+                h.height;
+
+
+            /*
+             * IMPORTANTE:
+             *
+             * Não fazemos rotate(),
+             * scale() ou translate().
+             *
+             * A imagem é desenhada
+             * exatamente na orientação
+             * entregue pelo decoder ASTC.
+             */
+
+            const ctx =
+                canvas.getContext("2d");
+
+
+            const imageData =
+                new ImageData(
+                    rgba,
+                    h.width,
+                    h.height
+                );
+
+
+            ctx.clearRect(
+                0,
+                0,
+                h.width,
+                h.height
+            );
+
+
+            ctx.putImageData(
+                imageData,
+                0,
+                0
+            );
+
+
+            canvas.hidden =
+                false;
+
+
+            setProgress(
+                97,
+                "Gerando PNG..."
+            );
+
+
+            const pngBlob =
+                await new Promise(
+                    (resolve, reject) => {
+
+                        canvas.toBlob(
+                            blob => {
+
+                                if(blob){
+                                    resolve(blob);
+                                }
+                                else{
+                                    reject(
+                                        new Error(
+                                            "Não foi possível criar o PNG."
+                                        )
+                                    );
+                                }
+
+                            },
+
+                            "image/png"
+                        );
+                    }
+                );
+
+
+            if(currentUrl){
+
+                URL.revokeObjectURL(
+                    currentUrl
+                );
+            }
+
+
+            currentUrl =
+                URL.createObjectURL(
+                    pngBlob
+                );
+
+
+            const baseName =
+                selectedFile.name.replace(
+                    /\.astc$/i,
+                    ""
+                );
+
+
+            download.href =
+                currentUrl;
+
+            download.download =
+                baseName + ".png";
+
+            download.textContent =
+                "⬇ Baixar " +
+                baseName +
+                ".png";
+
+            download.hidden =
+                false;
+
+
+            setProgress(
+                100,
+
+                "CONCLUÍDO! ✅\n\n" +
+                "Imagem: " +
+                h.width +
+                " × " +
+                h.height +
+                "\n" +
+                "PNG: " +
+                Math.round(
+                    pngBlob.size / 1024
+                ) +
+                " KB"
+            );
+
+
+        }
+        catch(error){
+
+            console.error(error);
+
+            setProgress(
+                0,
+
+                "ERRO ❌\n\n" +
+                (
+                    error.message ||
+                    String(error)
+                )
+            );
+
+        }
+        finally{
+
+            convertBtn.disabled =
+                false;
+        }
+    }
+);
+
+</script>
+
+</body>
+</html>
